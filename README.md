@@ -3,7 +3,7 @@
 An SSH-like remote control system between a Windows 11 controller (`xpctl`)
 and a Windows XP agent (`xpagent`) running in VirtualBox: run commands,
 manage files, and inspect the system, scriptable enough for an AI agent to
-drive directly. See [DESIGN.md](DESIGN.md) for the full architecture.
+drive directly.
 
 ## Quick start
 
@@ -45,3 +45,5 @@ dist\xpctl.exe sysinfo 192.168.56.101:5959
 ```
 
 Run `xpctl help` for the full command list.
+
+Copyright 2026, Seyyed Ali Mohammadiyeh (MAX BASE)
