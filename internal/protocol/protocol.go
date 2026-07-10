@@ -37,6 +37,8 @@ const (
 	MsgFSMove       byte = 0x26
 	MsgFSCopy       byte = 0x27
 	MsgOK           byte = 0x28
+	MsgFSTree       byte = 0x29
+	MsgFSTreeResult byte = 0x2A
 
 	MsgFSReadStart byte = 0x30
 	MsgFSReadChunk byte = 0x31
@@ -220,6 +222,22 @@ type FSCopyRequest struct {
 type Result struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message,omitempty"`
+}
+
+type FSTreeRequest struct {
+	Path     string `json:"path"`
+	MaxDepth int    `json:"max_depth"`
+}
+
+type FSTreeEntry struct {
+	Path  string `json:"path"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size"`
+}
+
+type FSTreeResult struct {
+	Entries   []FSTreeEntry `json:"entries"`
+	Truncated bool          `json:"truncated"`
 }
 
 type FSReadStartRequest struct {

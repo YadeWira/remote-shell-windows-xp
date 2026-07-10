@@ -7,11 +7,14 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/protocol"
 )
+
+const maxTreeEntries = 50000
 
 func List(path string) ([]protocol.FSEntry, error) {
 	entries, err := ioutil.ReadDir(path)
@@ -28,6 +31,41 @@ func List(path string) ([]protocol.FSEntry, error) {
 		})
 	}
 	return out, nil
+}
+
+func Tree(root string, maxDepth int) ([]protocol.FSTreeEntry, bool, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.IsDir() {
+		return nil, false, fmt.Errorf("fsops: %s is not a directory", root)
+	}
+
+	var entries []protocol.FSTreeEntry
+	truncated := false
+
+	var walk func(dir, relPrefix string, depth int)
+	walk = func(dir, relPrefix string, depth int) {
+		children, err := ioutil.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, c := range children {
+			if len(entries) >= maxTreeEntries {
+				truncated = true
+				return
+			}
+			relPath := path.Join(relPrefix, c.Name())
+			entries = append(entries, protocol.FSTreeEntry{Path: relPath, IsDir: c.IsDir(), Size: c.Size()})
+			if c.IsDir() && (maxDepth <= 0 || depth < maxDepth) {
+				walk(filepath.Join(dir, c.Name()), relPath, depth+1)
+			}
+		}
+	}
+
+	walk(root, "", 1)
+	return entries, truncated, nil
 }
 
 func Stat(path string) (protocol.FSStatResult, error) {

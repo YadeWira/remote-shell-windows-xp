@@ -87,6 +87,8 @@ func (a *agent) handleStream(mux *transport.Multiplexer, sm *session.Manager, ns
 		a.respondFSMove(mux, id, ns.First, remote)
 	case protocol.MsgFSCopy:
 		a.respondFSCopy(mux, id, ns.First, remote)
+	case protocol.MsgFSTree:
+		a.respondFSTree(mux, id, ns.First, remote)
 	case protocol.MsgFSReadStart:
 		a.handleFSRead(mux, id, ns.Frames, ns.First, remote)
 	case protocol.MsgFSWriteStart:
@@ -237,6 +239,14 @@ func (a *agent) respondFSCopy(mux *transport.Multiplexer, id uint32, first proto
 	protocol.Unmarshal(first.Payload, &req)
 	a.audit.Log(remote, id, "cp", req.Src+" -> "+req.Dst)
 	respondOK(mux, id, fsops.Copy(req.Src, req.Dst))
+}
+
+func (a *agent) respondFSTree(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
+	var req protocol.FSTreeRequest
+	protocol.Unmarshal(first.Payload, &req)
+	a.audit.Log(remote, id, "tree", req.Path)
+	entries, truncated, err := fsops.Tree(req.Path, req.MaxDepth)
+	respond(mux, id, protocol.MsgFSTreeResult, protocol.FSTreeResult{Entries: entries, Truncated: truncated}, err)
 }
 
 func (a *agent) handleFSRead(mux *transport.Multiplexer, id uint32, frames <-chan protocol.Frame, first protocol.Frame, remote string) {

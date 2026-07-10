@@ -105,17 +105,8 @@ func cmdGet(args []string) error {
 
 	var total int64
 	err = withClient(addr, func(c *Client) error {
-		id := c.mux.NextStreamID()
-		ch := c.mux.Open(id)
-		defer c.mux.CloseStream(id)
-
-		req := protocol.FSReadStartRequest{Path: remotePath}
-		if err := c.mux.Send(protocol.Frame{Type: protocol.MsgFSReadStart, StreamID: id, Payload: protocol.Marshal(req)}); err != nil {
-			return err
-		}
-
 		var derr error
-		total, derr = receiveDownload(c, id, ch, out)
+		total, derr = streamRemoteFile(c, remotePath, out)
 		return derr
 	})
 	if err != nil {
@@ -124,6 +115,34 @@ func cmdGet(args []string) error {
 
 	fmt.Printf("downloaded %d bytes to %s\n", total, localPath)
 	return nil
+}
+
+func cmdCat(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: xpctl cat <addr:port> <remote-path> [<remote-path>...]")
+	}
+	addr, paths := args[0], args[1:]
+
+	return withClient(addr, func(c *Client) error {
+		for _, p := range paths {
+			if _, err := streamRemoteFile(c, p, os.Stdout); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func streamRemoteFile(c *Client, remotePath string, out io.Writer) (int64, error) {
+	id := c.mux.NextStreamID()
+	ch := c.mux.Open(id)
+	defer c.mux.CloseStream(id)
+
+	req := protocol.FSReadStartRequest{Path: remotePath}
+	if err := c.mux.Send(protocol.Frame{Type: protocol.MsgFSReadStart, StreamID: id, Payload: protocol.Marshal(req)}); err != nil {
+		return 0, err
+	}
+	return receiveDownload(c, id, ch, out)
 }
 
 func receiveDownload(c *Client, id uint32, ch <-chan protocol.Frame, out io.Writer) (int64, error) {

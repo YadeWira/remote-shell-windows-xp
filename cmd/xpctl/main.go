@@ -15,6 +15,8 @@ var commands = map[string]func([]string) error{
 	"rm":      cmdRm,
 	"mv":      cmdMv,
 	"cp":      cmdCp,
+	"cat":     cmdCat,
+	"tree":    cmdTree,
 	"get":     cmdGet,
 	"put":     cmdPut,
 	"ps":      cmdPs,
@@ -50,14 +52,16 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, `xpctl - control an xpagent instance on a Windows XP guest
+	fmt.Fprintln(os.Stderr, `xpctl - control an xpagent instance on a remote machine
 
 Usage:
   xpctl pair <addr:port> --token <token> [--yes]
   xpctl exec <addr:port> "<command>" [--cwd DIR] [--json]
   xpctl shell <addr:port>
   xpctl ls <addr:port> <path>
+  xpctl tree <addr:port> <path> [--depth N] [--json]
   xpctl stat <addr:port> <path>
+  xpctl cat <addr:port> <path> [<path>...]
   xpctl mkdir <addr:port> <path>
   xpctl rm <addr:port> <path> [--recursive]
   xpctl mv <addr:port> <src> <dst>
