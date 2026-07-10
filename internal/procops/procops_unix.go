@@ -12,7 +12,7 @@ import (
 )
 
 func List() ([]protocol.ProcInfo, error) {
-	out, err := exec.Command("ps", "-A", "-o", "pid,ppid,comm").Output()
+	out, err := exec.Command("ps", "-A", "-o", "pid,ppid,args").Output()
 	if err != nil {
 		return nil, err
 	}
