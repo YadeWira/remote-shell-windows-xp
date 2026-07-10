@@ -26,7 +26,7 @@ func connect(addr string) (*Client, error) {
 	}
 	entry, ok := store.Get(addr)
 	if !ok {
-		return nil, fmt.Errorf("no saved trust for %s — run `xpctl pair %s --token <token>` first", addr, addr)
+		return nil, fmt.Errorf("no saved trust for %s, run `xpctl pair %s --token <token>` first", addr, addr)
 	}
 
 	conn, _, err := transport.DialTLS(addr, entry.Fingerprint, 10*time.Second)

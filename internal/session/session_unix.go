@@ -9,6 +9,8 @@ import (
 )
 
 const defaultCwd = "/"
+const newline = "\n"
+const cdNotFoundMsg = "No such file or directory"
 
 func shellCommand(command string) *exec.Cmd {
 	return exec.Command("/bin/sh", "-c", command)

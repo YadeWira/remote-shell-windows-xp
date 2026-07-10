@@ -13,7 +13,7 @@ import (
 )
 
 func List() ([]protocol.ProcInfo, error) {
-	out, err := exec.Command("ps", "-A", "-o", "pid,ppid,args").Output()
+	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,args=").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -22,12 +22,9 @@ func List() ([]protocol.ProcInfo, error) {
 
 func parsePS(output string) []protocol.ProcInfo {
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-	if len(lines) == 0 {
-		return nil
-	}
 
 	procs := make([]protocol.ProcInfo, 0, len(lines))
-	for _, line := range lines[1:] {
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue
