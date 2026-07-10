@@ -1,0 +1,8 @@
+/dist/
+/xpagent-data/
+*.exe
+*.crt
+*.key
+token.txt
+audit.log
+known_agents.json
