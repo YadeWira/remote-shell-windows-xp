@@ -6,6 +6,8 @@ import (
 )
 
 const defaultCwd = `C:\`
+const newline = "\r\n"
+const cdNotFoundMsg = "The system cannot find the path specified."
 
 func shellCommand(command string) *exec.Cmd {
 	return exec.Command("cmd.exe", "/C", command)

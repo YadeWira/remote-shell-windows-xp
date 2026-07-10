@@ -82,7 +82,7 @@ func (m *Manager) runCd(streamID uint32, cwd, arg string, onStdout, onStderr fun
 	}
 	exitCode := 0
 	if err != nil {
-		onStderr([]byte(err.Error() + "\r\n"))
+		onStderr([]byte(err.Error() + newline))
 		exitCode = 1
 		newCwd = cwd
 	}
@@ -93,7 +93,7 @@ func (m *Manager) runCd(streamID uint32, cwd, arg string, onStdout, onStderr fun
 
 func resolveCd(cwd, arg string) (newCwd, output string, err error) {
 	if arg == "" {
-		return cwd, cwd + "\r\n", nil
+		return cwd, cwd + newline, nil
 	}
 	arg = strings.Trim(arg, `"`)
 
@@ -106,7 +106,7 @@ func resolveCd(cwd, arg string) (newCwd, output string, err error) {
 
 	info, statErr := os.Stat(target)
 	if statErr != nil || !info.IsDir() {
-		return cwd, "", errors.New("The system cannot find the path specified.")
+		return cwd, "", errors.New(cdNotFoundMsg)
 	}
 	return target, "", nil
 }
