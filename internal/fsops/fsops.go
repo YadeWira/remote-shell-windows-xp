@@ -9,6 +9,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/protocol"
@@ -93,17 +95,56 @@ func Delete(path string, recursive bool) error {
 	return os.Remove(path)
 }
 
-func Move(src, dst string) error { return os.Rename(src, dst) }
+// Move renames src to dst. On Windows os.Rename cannot cross drives, so in that case it
+// falls back to copy + delete.
+func Move(src, dst string) error {
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+	vs, vd := filepath.VolumeName(src), filepath.VolumeName(dst)
+	if vs == "" || strings.EqualFold(vs, vd) {
+		return err
+	}
+	if cerr := Copy(src, dst); cerr != nil {
+		return cerr
+	}
+	return Delete(src, true)
+}
 
 func Copy(src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
+	// Opening dst with O_TRUNC when it is the same file as src would empty the source first.
+	if dinfo, derr := os.Stat(dst); derr == nil && os.SameFile(info, dinfo) {
+		return fmt.Errorf("fsops: %s and %s are the same file", src, dst)
+	}
 	if info.IsDir() {
+		if isUnder(src, dst) {
+			return fmt.Errorf("fsops: cannot copy %s into itself (%s)", src, dst)
+		}
 		return copyDir(src, dst)
 	}
 	return copyFile(src, dst, info.Mode())
+}
+
+// isUnder reports whether child is parent itself or lies inside it.
+func isUnder(parent, child string) bool {
+	p, err1 := filepath.Abs(parent)
+	c, err2 := filepath.Abs(child)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	p, c = filepath.Clean(p), filepath.Clean(c)
+	if runtime.GOOS == "windows" {
+		p, c = strings.ToLower(p), strings.ToLower(c)
+	}
+	if p == c {
+		return true
+	}
+	return strings.HasPrefix(c, strings.TrimRight(p, string(filepath.Separator))+string(filepath.Separator))
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
@@ -204,11 +245,13 @@ func (u *Upload) Finish(expectedSha256 string, overwrite bool) error {
 			return err
 		}
 		if sum != expectedSha256 {
+			os.Remove(u.tmpPath)
 			return fmt.Errorf("fsops: checksum mismatch: expected %s got %s", expectedSha256, sum)
 		}
 	}
 	if !overwrite {
 		if _, err := os.Stat(u.finalPath); err == nil {
+			os.Remove(u.tmpPath)
 			return fmt.Errorf("fsops: %s already exists", u.finalPath)
 		}
 	}
