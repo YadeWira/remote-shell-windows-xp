@@ -133,7 +133,9 @@ func (a *agent) handleExec(mux *transport.Multiplexer, sm *session.Manager, id u
 
 func (a *agent) runExecOnce(mux *transport.Multiplexer, sm *session.Manager, id uint32, frames <-chan protocol.Frame, f protocol.Frame, remote string) bool {
 	var req protocol.ExecStartRequest
-	protocol.Unmarshal(f.Payload, &req)
+	if !decodeReq(mux, id, f.Payload, &req) {
+		return false
+	}
 	a.audit.Log(remote, id, "exec", req.Command)
 
 	stdin, killCh, resultCh := sm.StartExec(id, req,
@@ -156,6 +158,9 @@ func waitForExit(mux *transport.Multiplexer, id uint32, frames <-chan protocol.F
 	for {
 		select {
 		case res := <-resultCh:
+			if res.Err != nil {
+				mux.Send(protocol.Frame{Type: protocol.MsgExecStderr, StreamID: id, Payload: []byte(res.Err.Error() + "\n")})
+			}
 			mux.Send(protocol.Frame{Type: protocol.MsgExecExit, StreamID: id, Payload: protocol.Marshal(protocol.ExecExitResult{ExitCode: res.ExitCode, Cwd: res.Cwd})})
 			return true
 		case nf, ok := <-frames:
@@ -199,7 +204,9 @@ func respondOK(mux *transport.Multiplexer, id uint32, err error) {
 
 func (a *agent) respondFSList(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSListRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "ls", req.Path)
 	entries, err := fsops.List(req.Path)
 	respond(mux, id, protocol.MsgFSListResult, protocol.FSListResult{Entries: entries}, err)
@@ -207,7 +214,9 @@ func (a *agent) respondFSList(mux *transport.Multiplexer, id uint32, first proto
 
 func (a *agent) respondFSStat(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSStatRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "stat", req.Path)
 	res, err := fsops.Stat(req.Path)
 	respond(mux, id, protocol.MsgFSStatResult, res, err)
@@ -215,35 +224,45 @@ func (a *agent) respondFSStat(mux *transport.Multiplexer, id uint32, first proto
 
 func (a *agent) respondFSMkdir(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSMkdirRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "mkdir", req.Path)
 	respondOK(mux, id, fsops.Mkdir(req.Path))
 }
 
 func (a *agent) respondFSDelete(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSDeleteRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "rm", req.Path)
 	respondOK(mux, id, fsops.Delete(req.Path, req.Recursive))
 }
 
 func (a *agent) respondFSMove(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSMoveRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "mv", req.Src+" -> "+req.Dst)
 	respondOK(mux, id, fsops.Move(req.Src, req.Dst))
 }
 
 func (a *agent) respondFSCopy(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSCopyRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "cp", req.Src+" -> "+req.Dst)
 	respondOK(mux, id, fsops.Copy(req.Src, req.Dst))
 }
 
 func (a *agent) respondFSTree(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.FSTreeRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "tree", req.Path)
 	entries, truncated, err := fsops.Tree(req.Path, req.MaxDepth)
 	respond(mux, id, protocol.MsgFSTreeResult, protocol.FSTreeResult{Entries: entries, Truncated: truncated}, err)
@@ -251,7 +270,9 @@ func (a *agent) respondFSTree(mux *transport.Multiplexer, id uint32, first proto
 
 func (a *agent) handleFSRead(mux *transport.Multiplexer, id uint32, frames <-chan protocol.Frame, first protocol.Frame, remote string) {
 	var req protocol.FSReadStartRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "get", req.Path)
 
 	f, err := os.Open(req.Path)
@@ -263,6 +284,7 @@ func (a *agent) handleFSRead(mux *transport.Multiplexer, id uint32, frames <-cha
 
 	sum, total, err := streamFileToClient(mux, id, f)
 	if err != nil {
+		mux.Send(errFrame(id, err))
 		return
 	}
 	mux.Send(protocol.Frame{Type: protocol.MsgFSReadDone, StreamID: id, Payload: protocol.Marshal(protocol.FSReadDoneResult{
@@ -291,8 +313,11 @@ func streamFileToClient(mux *transport.Multiplexer, id uint32, f *os.File) (sha2
 				return "", 0, serr
 			}
 		}
-		if rerr != nil {
+		if rerr == io.EOF {
 			break
+		}
+		if rerr != nil {
+			return "", 0, rerr
 		}
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), total, nil
@@ -300,7 +325,9 @@ func streamFileToClient(mux *transport.Multiplexer, id uint32, f *os.File) (sha2
 
 func (a *agent) handleFSWrite(mux *transport.Multiplexer, id uint32, frames <-chan protocol.Frame, first protocol.Frame, remote string) {
 	var req protocol.FSWriteStartRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "put", req.Path)
 
 	up, offset, err := fsops.NewUpload(req.Path, req.Resume)
@@ -319,7 +346,8 @@ func (a *agent) handleFSWrite(mux *transport.Multiplexer, id uint32, frames <-ch
 		case protocol.MsgFSWriteChunk:
 			off, data, derr := protocol.DecodeChunk(nf.Payload)
 			if derr != nil {
-				continue
+				mux.Send(errFrame(id, derr))
+				return
 			}
 			if werr := up.WriteChunk(off, data); werr != nil {
 				mux.Send(errFrame(id, werr))
@@ -336,7 +364,9 @@ func (a *agent) handleFSWrite(mux *transport.Multiplexer, id uint32, frames <-ch
 
 func (a *agent) finishUpload(mux *transport.Multiplexer, id uint32, up *fsops.Upload, overwrite bool, nf protocol.Frame) {
 	var done protocol.FSWriteDoneRequest
-	protocol.Unmarshal(nf.Payload, &done)
+	if !decodeReq(mux, id, nf.Payload, &done) {
+		return
+	}
 	if err := up.Finish(done.Sha256, overwrite); err != nil {
 		mux.Send(protocol.Frame{Type: protocol.MsgFSWriteResult, StreamID: id, Payload: protocol.Marshal(protocol.Result{OK: false, Message: err.Error()})})
 		return
@@ -358,11 +388,21 @@ func (a *agent) respondProcList(mux *transport.Multiplexer, id uint32, remote st
 
 func (a *agent) respondProcKill(mux *transport.Multiplexer, id uint32, first protocol.Frame, remote string) {
 	var req protocol.ProcKillRequest
-	protocol.Unmarshal(first.Payload, &req)
+	if !decodeReq(mux, id, first.Payload, &req) {
+		return
+	}
 	a.audit.Log(remote, id, "kill", strconv.FormatUint(uint64(req.PID), 10))
 	respondOK(mux, id, procops.Kill(req.PID))
 }
 
 func errFrame(id uint32, err error) protocol.Frame {
 	return protocol.Frame{Type: protocol.MsgError, StreamID: id, Payload: protocol.Marshal(protocol.ErrorPayload{Message: err.Error()})}
+}
+
+func decodeReq(mux *transport.Multiplexer, id uint32, payload []byte, v interface{}) bool {
+	if err := protocol.Unmarshal(payload, v); err != nil {
+		mux.Send(errFrame(id, fmt.Errorf("malformed request: %v", err)))
+		return false
+	}
+	return true
 }

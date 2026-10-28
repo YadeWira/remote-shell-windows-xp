@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/protocol"
@@ -69,7 +70,14 @@ func parseCdCommand(command string) (arg string, ok bool) {
 	if matches == nil {
 		return "", false
 	}
-	return strings.TrimSpace(matches[3]), true
+	arg = strings.TrimSpace(matches[3])
+	// cmd.exe's "cd /d X:\dir" (change drive too): the switch is not part of the path.
+	if l := strings.ToLower(arg); l == "/d" {
+		arg = ""
+	} else if strings.HasPrefix(l, "/d ") || strings.HasPrefix(l, "/d\t") {
+		arg = strings.TrimSpace(arg[2:])
+	}
+	return arg, true
 }
 
 func (m *Manager) runCd(streamID uint32, cwd, arg string, onStdout, onStderr func([]byte)) (io.WriteCloser, chan<- struct{}, <-chan Result) {
@@ -158,22 +166,31 @@ func buildCommand(cwd string, req protocol.ExecStartRequest) (cmd *exec.Cmd, std
 }
 
 func (m *Manager) awaitCompletion(streamID uint32, cmd *exec.Cmd, cwd string, killCh <-chan struct{}, resultCh chan<- Result, wg *sync.WaitGroup) {
-	wg.Wait()
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case err := <-done:
-		m.setCwd(streamID, cwd)
-		resultCh <- Result{ExitCode: exitCodeOf(err), Cwd: cwd}
-	case <-killCh:
-		if cmd.Process != nil {
-			cmd.Process.Kill()
+	// Watch killCh from the start: the output pipes only reach EOF when the process (and
+	// every child holding them) exits, so waiting for them first made kill requests and
+	// client disconnects impossible to honour while the command was running.
+	finished := make(chan struct{})
+	var killed int32
+	go func() {
+		select {
+		case <-killCh:
+			atomic.StoreInt32(&killed, 1)
+			if cmd.Process != nil {
+				killTree(cmd.Process)
+			}
+		case <-finished:
 		}
-		<-done
-		m.setCwd(streamID, cwd)
+	}()
+
+	wg.Wait()
+	err := cmd.Wait()
+	close(finished)
+	m.setCwd(streamID, cwd)
+	if atomic.LoadInt32(&killed) == 1 {
 		resultCh <- Result{ExitCode: -1, Cwd: cwd, Err: errors.New("killed")}
+		return
 	}
+	resultCh <- Result{ExitCode: exitCodeOf(err), Cwd: cwd}
 }
 
 func streamOutput(r io.Reader, onChunk func([]byte)) {

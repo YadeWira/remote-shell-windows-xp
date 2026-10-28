@@ -4,6 +4,7 @@
 package session
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 )
@@ -18,4 +19,8 @@ func shellCommand(command string) *exec.Cmd {
 
 func looksAbsolute(p string) bool {
 	return filepath.IsAbs(p)
+}
+
+func killTree(p *os.Process) {
+	p.Kill()
 }
