@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/protocol"
 )
@@ -45,11 +47,22 @@ func cmdExec(args []string) error {
 	}
 
 	if *asJSON {
-		out, _ := json.Marshal(map[string]interface{}{
+		res := map[string]interface{}{
 			"stdout":    stdout.String(),
 			"stderr":    stderr.String(),
 			"exit_code": exitCode,
-		})
+		}
+		// JSON strings must be UTF-8; cmd.exe writes the OEM code page, which json.Marshal would
+		// silently replace with U+FFFD. Keep the exact bytes next to the (lossy) text.
+		if !utf8.Valid(stdout.Bytes()) {
+			res["stdout_b64"] = base64.StdEncoding.EncodeToString(stdout.Bytes())
+			res["stdout_note"] = "stdout is not valid UTF-8 (probably the remote OEM code page); stdout_b64 has the exact bytes"
+		}
+		if !utf8.Valid(stderr.Bytes()) {
+			res["stderr_b64"] = base64.StdEncoding.EncodeToString(stderr.Bytes())
+			res["stderr_note"] = "stderr is not valid UTF-8 (probably the remote OEM code page); stderr_b64 has the exact bytes"
+		}
+		out, _ := json.Marshal(res)
 		fmt.Println(string(out))
 	}
 	if exitCode != 0 {

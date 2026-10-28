@@ -16,19 +16,23 @@ import (
 func cmdPair(args []string) error {
 	fs := flag.NewFlagSet("pair", flag.ExitOnError)
 	token := fs.String("token", "", "auth token printed by xpagent on first run (required)")
+	wantFP := fs.String("fingerprint", "", "expected certificate sha256 fingerprint (as printed by xpagent); verified BEFORE the token is sent")
 	yes := fs.Bool("yes", false, "skip the interactive fingerprint confirmation prompt")
 	fs.Parse(reorderArgs(fs, args))
 	rest := fs.Args()
 	if len(rest) < 1 || *token == "" {
-		return fmt.Errorf("usage: xpctl pair <addr:port> --token <token> [--yes]")
+		return fmt.Errorf("usage: xpctl pair <addr:port> --token <token> [--fingerprint <sha256>] [--yes]")
 	}
 	addr := rest[0]
 
-	conn, fingerprint, err := transport.DialTLS(addr, "", 10*time.Second)
+	conn, fingerprint, err := transport.DialTLS(addr, strings.ToLower(strings.TrimSpace(*wantFP)), 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", addr, err)
 	}
 	defer conn.Close()
+	if *wantFP == "" {
+		fmt.Fprintln(os.Stderr, "xpctl: warning: no --fingerprint given; the token is sent to whatever certificate this address presents. Pass the fingerprint printed by xpagent to verify it first.")
+	}
 
 	resp, err := transport.ClientHandshake(conn, *token)
 	if err != nil {
