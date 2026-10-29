@@ -7,8 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BaseMax/remote-shell-windows-xp/internal/fileacl"
 )
 
 // supervise keeps an agent running: it starts a child agent, restarts it when it exits and swaps in
@@ -31,17 +34,25 @@ func supervise(cfg config) int {
 		fmt.Fprintln(os.Stderr, "xpagent: creating data dir:", err)
 		return 1
 	}
-	logFile, err := os.OpenFile(filepath.Join(cfg.dataDir, "agent.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	fileacl.RestrictDir(cfg.dataDir)
+	logPath := filepath.Join(cfg.dataDir, "agent.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xpagent: opening agent.log:", err)
 		return 1
 	}
+	fileacl.RestrictFile(logPath)
 	defer logFile.Close()
 	logger := log.New(io.MultiWriter(logFile, os.Stderr), "", log.LstdFlags)
 
 	args := []string{"-listen", cfg.listenAddr, "-data", cfg.dataDir}
 	if cfg.insecureBindAll {
 		args = append(args, "-insecure-bind-all")
+	}
+	args = append(args, "-max-conns", strconv.Itoa(cfg.maxConns), "-max-preauth", strconv.Itoa(cfg.maxPreAuth),
+		"-max-streams", strconv.Itoa(cfg.maxStreams), "-audit-max-mb", strconv.Itoa(cfg.auditMaxMB))
+	if cfg.auditFull {
+		args = append(args, "-audit-full")
 	}
 
 	delay := 5 * time.Second

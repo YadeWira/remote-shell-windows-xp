@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/protocol"
@@ -33,7 +34,7 @@ func connect(addr string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", addr, err)
 	}
-	if _, err := transport.ClientHandshake(conn, entry.Token); err != nil {
+	if _, err := transport.ClientHandshakeAs(conn, entry.Token, clientName()); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("authenticating with %s: %w", addr, err)
 	}
@@ -44,6 +45,25 @@ func connect(addr string) (*Client, error) {
 }
 
 func (c *Client) Close() error { return c.mux.Close() }
+
+// clientName identifies this controller to the agent's audit log: $XPCTL_NAME, or user@host.
+func clientName() string {
+	if n := os.Getenv("XPCTL_NAME"); n != "" {
+		return n
+	}
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("USERNAME")
+	}
+	host, _ := os.Hostname()
+	switch {
+	case user != "" && host != "":
+		return user + "@" + host
+	case user != "":
+		return user
+	}
+	return host
+}
 
 func withClient(addr string, fn func(*Client) error) error {
 	c, err := connect(addr)

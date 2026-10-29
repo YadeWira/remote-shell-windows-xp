@@ -71,7 +71,12 @@ func DialTLS(addr, wantFingerprint string, timeout time.Duration) (*Conn, string
 }
 
 func ClientHandshake(conn *Conn, token string) (*protocol.HelloResponse, error) {
-	req := protocol.HelloRequest{Version: protocol.Version, Token: token}
+	return ClientHandshakeAs(conn, token, "")
+}
+
+// ClientHandshakeAs is ClientHandshake that also tells the agent who is connecting.
+func ClientHandshakeAs(conn *Conn, token, name string) (*protocol.HelloResponse, error) {
+	req := protocol.HelloRequest{Version: protocol.Version, Token: token, Name: name}
 	if err := conn.SendFrame(protocol.Frame{Type: protocol.MsgHello, Payload: protocol.Marshal(req)}); err != nil {
 		return nil, err
 	}
@@ -100,22 +105,37 @@ func checkHelloReply(msgType byte, resp protocol.HelloResponse) error {
 	}
 }
 
-func ServerHandshake(conn *Conn, first protocol.Frame, expectedToken, hostname string) error {
+// ServerHandshake checks the HELLO frame and answers it. It returns the (sanitized) name the
+// controller announced, which may be empty.
+func ServerHandshake(conn *Conn, first protocol.Frame, expectedToken, hostname string) (string, error) {
 	if first.Type != protocol.MsgHello {
 		conn.SendFrame(protocol.Frame{Type: protocol.MsgHelloReject, Payload: protocol.Marshal(protocol.HelloResponse{Message: "expected HELLO"})})
-		return fmt.Errorf("transport: expected HELLO, got 0x%02x", first.Type)
+		return "", fmt.Errorf("transport: expected HELLO, got 0x%02x", first.Type)
 	}
 
 	var req protocol.HelloRequest
 	if err := protocol.Unmarshal(first.Payload, &req); err != nil {
 		conn.SendFrame(protocol.Frame{Type: protocol.MsgHelloReject, Payload: protocol.Marshal(protocol.HelloResponse{Message: "malformed hello"})})
-		return err
+		return "", err
 	}
 
 	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(expectedToken)) != 1 {
 		conn.SendFrame(protocol.Frame{Type: protocol.MsgHelloReject, Payload: protocol.Marshal(protocol.HelloResponse{Message: "invalid token"})})
-		return errors.New("transport: invalid token")
+		return "", errors.New("transport: invalid token")
 	}
 
-	return conn.SendFrame(protocol.Frame{Type: protocol.MsgHelloOK, Payload: protocol.Marshal(protocol.HelloResponse{OK: true, Hostname: hostname})})
+	return SanitizeName(req.Name), conn.SendFrame(protocol.Frame{Type: protocol.MsgHelloOK, Payload: protocol.Marshal(protocol.HelloResponse{OK: true, Hostname: hostname})})
+}
+
+// SanitizeName keeps a client-supplied name safe for logs: printable ASCII only, at most 64 characters.
+func SanitizeName(name string) string {
+	var b []byte
+	for i := 0; i < len(name) && len(b) < 64; i++ {
+		c := name[i]
+		if c < 0x20 || c > 0x7e {
+			c = '?'
+		}
+		b = append(b, c)
+	}
+	return string(b)
 }

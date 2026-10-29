@@ -16,6 +16,7 @@ import (
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/auditlog"
 	"github.com/BaseMax/remote-shell-windows-xp/internal/certutil"
+	"github.com/BaseMax/remote-shell-windows-xp/internal/fileacl"
 	"github.com/BaseMax/remote-shell-windows-xp/internal/transport"
 )
 
@@ -23,6 +24,13 @@ type agent struct {
 	token    string
 	hostname string
 	audit    *auditlog.Logger
+
+	maxConns   int32
+	maxPreAuth int32
+	maxStreams int32
+	conns      int32 // open connections, authenticated or not
+	preAuth    int32 // connections that have not authenticated yet
+	lastReject int64 // unix time of the last "limit reached" log line, to avoid flooding the log
 }
 
 type config struct {
@@ -35,6 +43,11 @@ type config struct {
 	supervise       bool
 	firewallFrom    string
 	noStart         bool
+	maxConns        int
+	maxPreAuth      int
+	maxStreams      int
+	auditFull       bool
+	auditMaxMB      int
 }
 
 func main() {
@@ -60,8 +73,11 @@ func main() {
 		log.Fatalf("xpagent: creating data dir: %v", err)
 	}
 
+	if err := fileacl.RestrictDir(cfg.dataDir); err != nil {
+		log.Printf("xpagent: warning: could not restrict the data dir permissions: %v", err)
+	}
 	log.Printf("xpagent: data dir %s", cfg.dataDir)
-	a, cert, fp, err := bootstrap(cfg.dataDir, host, cfg.listenAddr)
+	a, cert, fp, err := bootstrap(cfg, host)
 	if err != nil {
 		log.Fatalf("xpagent: %v", err)
 	}
@@ -79,6 +95,11 @@ func parseFlags() config {
 	supervise := flag.Bool("supervise", false, "run the agent and restart it when it exits; applies a pending <exe>.new update (what the installed task runs)")
 	firewallFrom := flag.String("firewall-from", "", "with -install: also open the firewall for the agent's port from these addresses, e.g. 172.17.0.0/16,172.30.0.0/24")
 	noStart := flag.Bool("no-start", false, "with -install: create the task but do not start it now")
+	maxConns := flag.Int("max-conns", 32, "maximum simultaneous connections (0 = unlimited)")
+	maxPreAuth := flag.Int("max-preauth", 8, "maximum connections that have not authenticated yet (0 = unlimited)")
+	maxStreams := flag.Int("max-streams", 64, "maximum concurrent requests per connection (0 = unlimited)")
+	auditFull := flag.Bool("audit-full", false, "log exec command lines as typed; by default password-like values are hidden")
+	auditMaxMB := flag.Int("audit-max-mb", 10, "rotate audit.log when it exceeds this many MB, keeping 3 old files (0 = never rotate)")
 	insecureBindAll := flag.Bool("insecure-bind-all", false, "allow binding to 0.0.0.0 or [::] (dangerous: exposes the agent beyond the VM host-only network)")
 	flag.Parse()
 
@@ -90,7 +111,8 @@ func parseFlags() config {
 		os.Exit(2)
 	}
 	return config{listenAddr: *listenAddr, dataDir: *dataDir, insecureBindAll: *insecureBindAll, showPairing: *showPair,
-		install: *install, uninstall: *uninstall, supervise: *supervise, firewallFrom: *firewallFrom, noStart: *noStart}
+		install: *install, uninstall: *uninstall, supervise: *supervise, firewallFrom: *firewallFrom, noStart: *noStart,
+		maxConns: *maxConns, maxPreAuth: *maxPreAuth, maxStreams: *maxStreams, auditFull: *auditFull, auditMaxMB: *auditMaxMB}
 }
 
 // defaultDataDir is next to the executable, not relative to the working directory: an agent
@@ -135,7 +157,8 @@ func validateListenAddr(listenAddr string, insecureBindAll bool) (host string, e
 	return host, nil
 }
 
-func bootstrap(dataDir, host, listenAddr string) (*agent, tls.Certificate, string, error) {
+func bootstrap(cfg config, host string) (*agent, tls.Certificate, string, error) {
+	dataDir, listenAddr := cfg.dataDir, cfg.listenAddr
 	certPath := filepath.Join(dataDir, "agent.crt")
 	keyPath := filepath.Join(dataDir, "agent.key")
 	tokenPath := filepath.Join(dataDir, "token.txt")
@@ -156,13 +179,25 @@ func bootstrap(dataDir, host, listenAddr string) (*agent, tls.Certificate, strin
 		return nil, tls.Certificate{}, "", fmt.Errorf("fingerprint: %v", err)
 	}
 
-	audit, err := auditlog.Open(auditPath)
+	audit, err := auditlog.OpenWith(auditPath, auditlog.Options{
+		MaxSize: int64(cfg.auditMaxMB) << 20,
+		Redact:  !cfg.auditFull,
+		OnError: func(err error) { log.Printf("xpagent: audit log: %v", err) },
+	})
 	if err != nil {
 		return nil, tls.Certificate{}, "", fmt.Errorf("audit log: %v", err)
 	}
 
+	// 0600 is ignored on Windows: make sure the secrets are not readable by other local users.
+	for _, p := range []string{certPath, keyPath, tokenPath, auditPath} {
+		if err := fileacl.RestrictFile(p); err != nil {
+			log.Printf("xpagent: warning: could not restrict permissions on %s: %v", p, err)
+		}
+	}
+
 	hostname, _ := os.Hostname()
-	a := &agent{token: token, hostname: hostname, audit: audit}
+	a := &agent{token: token, hostname: hostname, audit: audit,
+		maxConns: int32(cfg.maxConns), maxPreAuth: int32(cfg.maxPreAuth), maxStreams: int32(cfg.maxStreams)}
 
 	if certGenerated || tokenGenerated {
 		printFirstRunBanner(fp, token, listenAddr)

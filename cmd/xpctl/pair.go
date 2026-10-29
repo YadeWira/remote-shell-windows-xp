@@ -34,7 +34,7 @@ func cmdPair(args []string) error {
 		fmt.Fprintln(os.Stderr, "xpctl: warning: no --fingerprint given; the token is sent to whatever certificate this address presents. Pass the fingerprint printed by xpagent to verify it first.")
 	}
 
-	resp, err := transport.ClientHandshake(conn, *token)
+	resp, err := transport.ClientHandshakeAs(conn, *token, clientName())
 	if err != nil {
 		return fmt.Errorf("authenticating: %w", err)
 	}

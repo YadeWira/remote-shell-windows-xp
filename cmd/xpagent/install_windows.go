@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/BaseMax/remote-shell-windows-xp/internal/fileacl"
 )
 
 const taskName = "xpagent"
@@ -29,12 +31,19 @@ func install(cfg config) int {
 		fmt.Fprintln(os.Stderr, "xpagent: creating data dir:", err)
 		return 1
 	}
+	if err := fileacl.RestrictDir(cfg.dataDir); err != nil {
+		fmt.Fprintln(os.Stderr, "xpagent: warning: could not restrict the data dir permissions:", err)
+	}
 	runPath, _ := childPaths(exe)
 	os.Remove(runPath) // a new executable should take effect; ignored if the old agent is running from it
 
 	tr := quoteIfNeeded(exe) + " -supervise -listen " + cfg.listenAddr + " -data " + quoteIfNeeded(cfg.dataDir)
 	if cfg.insecureBindAll {
 		tr += " -insecure-bind-all"
+	}
+	tr += fmt.Sprintf(" -max-conns %d -max-preauth %d -max-streams %d -audit-max-mb %d", cfg.maxConns, cfg.maxPreAuth, cfg.maxStreams, cfg.auditMaxMB)
+	if cfg.auditFull {
+		tr += " -audit-full"
 	}
 	// Windows XP's schtasks has no /F for /Create: remove a previous task (errors ignored) first.
 	runCmd("schtasks", "/Delete", "/TN", taskName, "/F")

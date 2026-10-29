@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/BaseMax/remote-shell-windows-xp/internal/fileacl"
 )
 
 type Entry struct {
@@ -51,7 +53,12 @@ func (s *Store) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, b, 0600)
+	if err := os.WriteFile(s.path, b, 0600); err != nil {
+		return err
+	}
+	// 0600 does nothing on Windows: restrict the ACL so other local users cannot read the tokens.
+	fileacl.RestrictDir(filepath.Dir(s.path))
+	return fileacl.RestrictFile(s.path)
 }
 
 func (s *Store) Get(addr string) (Entry, bool) {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/fsops"
@@ -18,9 +19,41 @@ import (
 	"github.com/BaseMax/remote-shell-windows-xp/internal/transport"
 )
 
+// admit applies the connection limits. On success the caller must call release when the
+// connection ends and leavePreAuth once it has authenticated (or ended).
+func (a *agent) admit() bool {
+	n := atomic.AddInt32(&a.conns, 1)
+	p := atomic.AddInt32(&a.preAuth, 1)
+	if (a.maxConns > 0 && n > a.maxConns) || (a.maxPreAuth > 0 && p > a.maxPreAuth) {
+		atomic.AddInt32(&a.conns, -1)
+		atomic.AddInt32(&a.preAuth, -1)
+		return false
+	}
+	return true
+}
+
+func (a *agent) leavePreAuth() { atomic.AddInt32(&a.preAuth, -1) }
+func (a *agent) release()      { atomic.AddInt32(&a.conns, -1) }
+
 func (a *agent) handleConn(raw net.Conn) {
 	defer raw.Close()
 	remote := raw.RemoteAddr().String()
+
+	if !a.admit() {
+		// One log line per 10 s at most: a flood must not also flood the audit log.
+		now := time.Now().Unix()
+		if last := atomic.LoadInt64(&a.lastReject); now-last >= 10 && atomic.CompareAndSwapInt64(&a.lastReject, last, now) {
+			a.audit.Log(remote, 0, "rejected", fmt.Sprintf("connection limit reached (max %d, pre-auth %d)", a.maxConns, a.maxPreAuth))
+		}
+		return
+	}
+	defer a.release()
+	authenticated := false
+	defer func() {
+		if !authenticated {
+			a.leavePreAuth()
+		}
+	}()
 
 	conn := transport.New(raw)
 	conn.SetDeadline(time.Now().Add(15 * time.Second))
@@ -28,11 +61,17 @@ func (a *agent) handleConn(raw net.Conn) {
 	if err != nil {
 		return
 	}
-	if err := transport.ServerHandshake(conn, first, a.token, a.hostname); err != nil {
+	name, err := transport.ServerHandshake(conn, first, a.token, a.hostname)
+	if err != nil {
 		a.audit.Log(remote, 0, "auth-failed", err.Error())
 		return
 	}
 	conn.SetDeadline(time.Time{})
+	authenticated = true
+	a.leavePreAuth()
+	if name != "" {
+		remote = name + "@" + remote
+	}
 	a.audit.Log(remote, 0, "connect", "")
 
 	sm := session.NewManager()
@@ -45,13 +84,25 @@ func (a *agent) handleConn(raw net.Conn) {
 }
 
 func (a *agent) pumpConnection(mux *transport.Multiplexer, sm *session.Manager, remote string) {
+	var active int32
 	for {
 		select {
 		case ns, ok := <-mux.NewStreams():
 			if !ok {
 				return
 			}
-			go a.handleStream(mux, sm, ns, remote)
+			if a.maxStreams > 0 && atomic.AddInt32(&active, 1) > a.maxStreams {
+				atomic.AddInt32(&active, -1)
+				mux.Send(errFrame(ns.ID, fmt.Errorf("too many concurrent requests on this connection (limit %d)", a.maxStreams)))
+				mux.CloseStream(ns.ID)
+				continue
+			} else if a.maxStreams <= 0 {
+				atomic.AddInt32(&active, 1)
+			}
+			go func(ns transport.NewStream) {
+				defer atomic.AddInt32(&active, -1)
+				a.handleStream(mux, sm, ns, remote)
+			}(ns)
 		case cf, ok := <-mux.Control():
 			if !ok {
 				return

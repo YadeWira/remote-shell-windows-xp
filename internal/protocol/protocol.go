@@ -154,6 +154,9 @@ func DecodeChunk(payload []byte) (offset int64, data []byte, err error) {
 type HelloRequest struct {
 	Version int    `json:"version"`
 	Token   string `json:"token"`
+	// Name optionally identifies the controller (user@host by default in xpctl); the agent
+	// records it in the audit log next to the address.
+	Name string `json:"name,omitempty"`
 }
 
 type HelloResponse struct {
