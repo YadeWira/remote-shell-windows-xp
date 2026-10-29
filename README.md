@@ -10,6 +10,27 @@ host; both `xpctl` and `xpagent` are now cross-platform. This document is
 written to be usable by a human operator and by an AI agent driving the
 CLI directly, see **For AI agents** below.
 
+## About this fork
+
+This is a maintained fork of [BaseMax/remote-shell-windows-xp](https://github.com/BaseMax/remote-shell-windows-xp) (commit `16a7539`). It keeps the upstream design and protocol, so a fork `xpctl` talks to an upstream `xpagent` and the other way round, and adds fixes found by running the agent on a real Windows XP SP3 x86 guest (QEMU/KVM) driven by AI agents. The issues behind most of these fixes are filed upstream (BaseMax/remote-shell-windows-xp#1 to #17); this fork does not wait for them to be merged.
+
+What changed with respect to upstream:
+
+- **`exec` on Windows**: the command line is passed to `cmd.exe` verbatim, so quotes work as typed (`dir "C:\Program Files"`); `cmd.exe` is called by absolute path, which also fixes `exec` when the agent runs as SYSTEM; `cd /d X:\dir` works; `cd X && prog` (or `&`, `|`, `<`, `>` outside quotes) runs through the shell instead of being read as a bare `cd`.
+- **Killing**: `MsgExecKill` and a client disconnect now kill the running command and its children (`taskkill /F /T`) right away; before, they were ignored until the command ended.
+- **`xpctl exec --timeout DUR`**: kills the command after `DUR` (`30s`, `5m`) and exits with code `124`. Use it for anything that might not finish.
+- **Output that is not UTF-8** (the OEM code page of `cmd.exe`): `exec --json` adds `stdout_b64` / `stderr_b64` with the exact bytes and a note, instead of silently replacing characters.
+- **Errors are reported**: a failure to start the command goes to stderr, malformed requests return an error frame instead of running with zero values, and `get` no longer reports success after a read error.
+- **File operations**: `cp` refuses to copy a file onto itself (it used to truncate it to 0 bytes) or a directory into itself, `mv` falls back to copy and delete across drives, and a failed `put` no longer leaves a stale `.xpupload.tmp` that `--resume` would reuse.
+- **Pairing and startup**: the default data directory is next to the executable (not the current directory, which is `system32` for a service or a scheduled task), `xpagent -show-pairing` prints the fingerprint and token again, and `xpctl pair --fingerprint <sha256>` verifies the agent's certificate before the token is sent.
+- **Building the XP agent from Linux**: `build/build.sh xp` (see **Quick start**), plus Go 1.10.8 compatibility fixes (`%w` in shared code printed garbage on that toolchain).
+
+Not fixed yet (upstream issues #12, #13 and #14): file permissions are not enforced on Windows (the private key, token and audit log are readable by local users), there is no per-client identity or connection limit, and a late frame can reopen a closed stream. Pairing grants full control of the machine, like SSH: use it on trusted networks only.
+
+Tested on: Windows XP Professional SP3 (x86, build 2600, fully updated with Legacy Update), driven from Debian 13 with the fork `xpctl`. Windows 7 and newer, Linux and the other targets are built from the same code but were not retested on real machines by this fork.
+
+License and credit: the code is BaseMax's, under the GNU GPL v3 (see `LICENSE`); the changes in this fork are released under the same license.
+
 ## For AI agents
 
 `xpctl` is a plain, non-interactive CLI: every command is one process that
@@ -82,6 +103,12 @@ local audit log on the agent's machine with a timestamp.
 ```
 
 ```sh
+# Linux/macOS, the Windows XP agent (windows/386) with the legacy toolchain, no Windows host needed:
+curl -sSLO https://go.dev/dl/go1.10.8.linux-amd64.tar.gz && tar xzf go1.10.8.linux-amd64.tar.gz
+XPSHELL_GO110_ROOT=$PWD/go ./build/build.sh xp        # -> dist/xpagent-xp.exe
+```
+
+```sh
 # Linux/BSD/macOS, both binaries for the current OS/arch:
 ./build/build.sh
 # ...or a specific target:
@@ -147,7 +174,7 @@ xpctl's usual 0/1/2.
 ### `pair` - establish trust with an agent
 
 ```
-xpctl pair <addr:port> --token <token> [--yes]
+xpctl pair <addr:port> --token <token> [--fingerprint <sha256>] [--yes]
 ```
 
 First-time setup for a given `addr:port`. Connects without verifying the
@@ -164,6 +191,7 @@ agent presented.
   `~/Library/Application Support/xpctl/known_agents.json` on macOS). Every
   later command to that `addr:port` reads this automatically; the token
   never needs to be passed again.
+- `--fingerprint <sha256>` (fork): the certificate fingerprint printed by `xpagent` (or by `xpagent -show-pairing`). xpctl checks it before sending the token, so an impostor at the address never learns the token. Prefer it to a bare `--yes`.
 - Re-running `pair` for an address you've already paired overwrites the
   saved entry (useful if the agent was reinstalled with a new
   cert/token).
@@ -171,7 +199,7 @@ agent presented.
 ### `exec` - run one command and wait for it to finish
 
 ```
-xpctl exec <addr:port> "<command>" [--cwd <dir>] [--json]
+xpctl exec <addr:port> "<command>" [--cwd <dir>] [--timeout <dur>] [--json]
 ```
 
 Runs `<command>` through the target's native shell (`cmd.exe /C` on a
@@ -184,6 +212,8 @@ working directory (default `C:\` or `/`), or in `--cwd` if given. Quote
 - With `--json`: buffers everything, then prints one line to stdout:
   `{"stdout":"...","stderr":"...","exit_code":N}`, and still exits with
   that same `N`. **Recommended for AI/scripted use.**
+- `--timeout <dur>` (fork): if the command is still running after `<dur>` (Go duration: `30s`, `5m`), the agent is asked to kill it and its children, and xpctl exits with `124` after adding `xpctl: timed out after <dur>, command killed` to stderr. If the agent does not confirm within 10 seconds xpctl gives up anyway. A command that detaches a child holding the pipes (for example `start "x" cmd /k ...`) cannot always be killed this way.
+- A command line with `&`, `|`, `<` or `>` outside quotes, such as `cd /d C:\x && prog.exe`, is run by the shell as a whole; only a bare `cd`/`chdir` is handled by the agent.
 - `cd`/`chdir` as the command is special-cased server-side (no subprocess
   spawned) and updates the agent's tracked working directory for that
   connection, but a single `exec` call is a new connection each time, so
