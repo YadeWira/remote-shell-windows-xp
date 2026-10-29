@@ -30,12 +30,24 @@ type config struct {
 	dataDir         string
 	insecureBindAll bool
 	showPairing     bool
+	install         bool
+	uninstall       bool
+	supervise       bool
+	firewallFrom    string
+	noStart         bool
 }
 
 func main() {
 	cfg := parseFlags()
-	if cfg.showPairing {
+	switch {
+	case cfg.showPairing:
 		os.Exit(showPairing(cfg.dataDir))
+	case cfg.install:
+		os.Exit(install(cfg))
+	case cfg.uninstall:
+		os.Exit(uninstall(cfg))
+	case cfg.supervise:
+		os.Exit(supervise(cfg))
 	}
 
 	host, err := validateListenAddr(cfg.listenAddr, cfg.insecureBindAll)
@@ -62,17 +74,23 @@ func parseFlags() config {
 	listenAddr := flag.String("listen", "", "address:port to listen on, e.g. 192.168.56.1:5959 (required)")
 	dataDir := flag.String("data", "", "directory for cert/key/token/audit log (default: xpagent-data next to the executable)")
 	showPair := flag.Bool("show-pairing", false, "print the certificate fingerprint and token stored in -data, then exit")
+	install := flag.Bool("install", false, "Windows: register the agent as a boot-time SYSTEM scheduled task (with -listen, optional -data, -firewall-from), then start it")
+	uninstall := flag.Bool("uninstall", false, "Windows: remove the scheduled task, stop the agent and remove the firewall rule (pass -listen to name the port); the data dir is kept")
+	supervise := flag.Bool("supervise", false, "run the agent and restart it when it exits; applies a pending <exe>.new update (what the installed task runs)")
+	firewallFrom := flag.String("firewall-from", "", "with -install: also open the firewall for the agent's port from these addresses, e.g. 172.17.0.0/16,172.30.0.0/24")
+	noStart := flag.Bool("no-start", false, "with -install: create the task but do not start it now")
 	insecureBindAll := flag.Bool("insecure-bind-all", false, "allow binding to 0.0.0.0 or [::] (dangerous: exposes the agent beyond the VM host-only network)")
 	flag.Parse()
 
 	if *dataDir == "" {
 		*dataDir = defaultDataDir()
 	}
-	if *listenAddr == "" && !*showPair {
+	if *listenAddr == "" && !*showPair && !*uninstall {
 		fmt.Fprintln(os.Stderr, "xpagent: -listen is required, e.g. -listen 192.168.56.1:5959")
 		os.Exit(2)
 	}
-	return config{listenAddr: *listenAddr, dataDir: *dataDir, insecureBindAll: *insecureBindAll, showPairing: *showPair}
+	return config{listenAddr: *listenAddr, dataDir: *dataDir, insecureBindAll: *insecureBindAll, showPairing: *showPair,
+		install: *install, uninstall: *uninstall, supervise: *supervise, firewallFrom: *firewallFrom, noStart: *noStart}
 }
 
 // defaultDataDir is next to the executable, not relative to the working directory: an agent
