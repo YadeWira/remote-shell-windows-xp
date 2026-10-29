@@ -59,6 +59,9 @@ func (m *Manager) StartExec(streamID uint32, req protocol.ExecStartRequest, onSt
 		cwd = m.cwdFor(streamID)
 	}
 
+	if req.Desktop {
+		return m.runDesktop(streamID, cwd, req, onStdout)
+	}
 	if arg, ok := parseCdCommand(req.Command); ok {
 		return m.runCd(streamID, cwd, arg, onStdout, onStderr)
 	}
@@ -148,17 +151,19 @@ func (m *Manager) runProcess(streamID uint32, cwd string, req protocol.ExecStart
 		return nil, killCh, resultCh
 	}
 
+	prepareGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		resultCh <- Result{ExitCode: -1, Cwd: cwd, Err: err}
 		return nil, killCh, resultCh
 	}
+	group := attachGroup(cmd.Process)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); streamOutput(stdoutPipe, onStdout) }()
 	go func() { defer wg.Done(); streamOutput(stderrPipe, onStderr) }()
 
-	go m.awaitCompletion(streamID, cmd, cwd, killCh, resultCh, &wg)
+	go m.awaitCompletion(streamID, cmd, group, cwd, killCh, resultCh, &wg)
 
 	return stdinPipe, killCh, resultCh
 }
@@ -184,7 +189,7 @@ func buildCommand(cwd string, req protocol.ExecStartRequest) (cmd *exec.Cmd, std
 	return cmd, stdout, stderr, stdin, nil
 }
 
-func (m *Manager) awaitCompletion(streamID uint32, cmd *exec.Cmd, cwd string, killCh <-chan struct{}, resultCh chan<- Result, wg *sync.WaitGroup) {
+func (m *Manager) awaitCompletion(streamID uint32, cmd *exec.Cmd, group *procGroup, cwd string, killCh <-chan struct{}, resultCh chan<- Result, wg *sync.WaitGroup) {
 	// Watch killCh from the start: the output pipes only reach EOF when the process (and
 	// every child holding them) exits, so waiting for them first made kill requests and
 	// client disconnects impossible to honour while the command was running.
@@ -195,7 +200,7 @@ func (m *Manager) awaitCompletion(streamID uint32, cmd *exec.Cmd, cwd string, ki
 		case <-killCh:
 			atomic.StoreInt32(&killed, 1)
 			if cmd.Process != nil {
-				killTree(cmd.Process)
+				group.kill(cmd.Process)
 			}
 		case <-finished:
 		}
@@ -204,6 +209,7 @@ func (m *Manager) awaitCompletion(streamID uint32, cmd *exec.Cmd, cwd string, ki
 	wg.Wait()
 	err := cmd.Wait()
 	close(finished)
+	group.release()
 	m.setCwd(streamID, cwd)
 	if atomic.LoadInt32(&killed) == 1 {
 		resultCh <- Result{ExitCode: -1, Cwd: cwd, Err: errors.New("killed")}

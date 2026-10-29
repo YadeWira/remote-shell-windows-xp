@@ -166,6 +166,12 @@ type ExecStartRequest struct {
 	Command     string `json:"command"`
 	Cwd         string `json:"cwd,omitempty"`
 	Interactive bool   `json:"interactive"`
+	// Desktop starts the command on the interactive desktop (WinSta0\Default) of a Windows agent,
+	// so its windows are visible. Output is not captured. Without Wait the call returns at once
+	// with the process id.
+	Desktop bool `json:"desktop,omitempty"`
+	// Wait (with Desktop) waits for the process to exit and reports its exit code.
+	Wait bool `json:"wait,omitempty"`
 }
 
 type ExecExitResult struct {

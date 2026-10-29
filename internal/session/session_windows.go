@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"syscall"
 )
 
@@ -28,10 +27,4 @@ func shellCommand(command string) *exec.Cmd {
 
 func looksAbsolute(p string) bool {
 	return filepath.IsAbs(p) || (len(p) >= 2 && p[1] == ':')
-}
-
-// killTree kills the process and everything it started (taskkill ships with XP Professional).
-func killTree(p *os.Process) {
-	exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(p.Pid)).Run()
-	p.Kill()
 }

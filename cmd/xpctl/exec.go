@@ -20,13 +20,18 @@ func cmdExec(args []string) error {
 	fs := flag.NewFlagSet("exec", flag.ExitOnError)
 	cwd := fs.String("cwd", "", "working directory for the command")
 	timeout := fs.Duration("timeout", 0, "kill the command and exit with 124 if it runs longer than this (e.g. 30s, 5m); 0 = no limit")
+	desktop := fs.Bool("desktop", false, "start the command on the agent's interactive desktop (visible windows, Windows agents only); output is not captured and the call returns at once with the pid")
+	wait := fs.Bool("wait", false, "with --desktop: wait for the process to exit and use its exit code")
 	asJSON := fs.Bool("json", false, "print machine-readable JSON ({stdout,stderr,exit_code}) instead of streaming output")
 	fs.Parse(reorderArgs(fs, args))
 	rest := fs.Args()
 	if len(rest) < 2 {
-		return fmt.Errorf(`usage: xpctl exec <addr:port> "<command>" [--cwd DIR] [--timeout DUR] [--json]`)
+		return fmt.Errorf(`usage: xpctl exec <addr:port> "<command>" [--cwd DIR] [--timeout DUR] [--desktop [--wait]] [--json]`)
 	}
 	addr, command := rest[0], strings.Join(rest[1:], " ")
+	if *wait && !*desktop {
+		return fmt.Errorf("--wait only makes sense with --desktop")
+	}
 
 	var stdout, stderr bytes.Buffer
 	exitCode := 0
@@ -35,7 +40,7 @@ func cmdExec(args []string) error {
 		ch := c.mux.Open(id)
 		defer c.mux.CloseStream(id)
 
-		req := protocol.ExecStartRequest{Command: command, Cwd: *cwd}
+		req := protocol.ExecStartRequest{Command: command, Cwd: *cwd, Desktop: *desktop, Wait: *wait}
 		if err := c.mux.Send(protocol.Frame{Type: protocol.MsgExecStart, StreamID: id, Payload: protocol.Marshal(req)}); err != nil {
 			return err
 		}

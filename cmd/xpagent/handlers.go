@@ -136,7 +136,11 @@ func (a *agent) runExecOnce(mux *transport.Multiplexer, sm *session.Manager, id 
 	if !decodeReq(mux, id, f.Payload, &req) {
 		return false
 	}
-	a.audit.Log(remote, id, "exec", req.Command)
+	op := "exec"
+	if req.Desktop {
+		op = "exec-desktop"
+	}
+	a.audit.Log(remote, id, op, req.Command)
 
 	stdin, killCh, resultCh := sm.StartExec(id, req,
 		func(b []byte) { mux.Send(protocol.Frame{Type: protocol.MsgExecStdout, StreamID: id, Payload: b}) },

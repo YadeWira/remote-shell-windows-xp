@@ -56,7 +56,7 @@ func printUsage() {
 
 Usage:
   xpctl pair <addr:port> --token <token> [--yes]
-  xpctl exec <addr:port> "<command>" [--cwd DIR] [--timeout DUR] [--json]
+  xpctl exec <addr:port> "<command>" [--cwd DIR] [--timeout DUR] [--desktop [--wait]] [--json]
   xpctl shell <addr:port>
   xpctl ls <addr:port> <path>
   xpctl tree <addr:port> <path> [--depth N] [--json]
