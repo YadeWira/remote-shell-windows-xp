@@ -71,6 +71,11 @@ func parseCdCommand(command string) (arg string, ok bool) {
 		return "", false
 	}
 	arg = strings.TrimSpace(matches[3])
+	// "cd X && prog" (or &, |, <, > outside quotes) is a compound command line, not a bare cd:
+	// let the shell run it instead of taking everything after "cd " as the path.
+	if hasShellOperator(arg) {
+		return "", false
+	}
 	// cmd.exe's "cd /d X:\dir" (change drive too): the switch is not part of the path.
 	if l := strings.ToLower(arg); l == "/d" {
 		arg = ""
@@ -78,6 +83,20 @@ func parseCdCommand(command string) (arg string, ok bool) {
 		arg = strings.TrimSpace(arg[2:])
 	}
 	return arg, true
+}
+
+// hasShellOperator reports whether s contains a command separator or redirection outside double quotes.
+func hasShellOperator(s string) bool {
+	inQuote := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case !inQuote && strings.ContainsRune("&|<>", r):
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) runCd(streamID uint32, cwd, arg string, onStdout, onStderr func([]byte)) (io.WriteCloser, chan<- struct{}, <-chan Result) {

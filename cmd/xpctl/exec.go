@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/BaseMax/remote-shell-windows-xp/internal/protocol"
@@ -18,11 +19,12 @@ import (
 func cmdExec(args []string) error {
 	fs := flag.NewFlagSet("exec", flag.ExitOnError)
 	cwd := fs.String("cwd", "", "working directory for the command")
+	timeout := fs.Duration("timeout", 0, "kill the command and exit with 124 if it runs longer than this (e.g. 30s, 5m); 0 = no limit")
 	asJSON := fs.Bool("json", false, "print machine-readable JSON ({stdout,stderr,exit_code}) instead of streaming output")
 	fs.Parse(reorderArgs(fs, args))
 	rest := fs.Args()
 	if len(rest) < 2 {
-		return fmt.Errorf(`usage: xpctl exec <addr:port> "<command>" [--cwd DIR] [--json]`)
+		return fmt.Errorf(`usage: xpctl exec <addr:port> "<command>" [--cwd DIR] [--timeout DUR] [--json]`)
 	}
 	addr, command := rest[0], strings.Join(rest[1:], " ")
 
@@ -39,7 +41,7 @@ func cmdExec(args []string) error {
 		}
 
 		var oerr error
-		stdout, stderr, exitCode, oerr = collectExecOutput(c, id, ch, !*asJSON)
+		stdout, stderr, exitCode, oerr = collectExecOutput(c, id, ch, !*asJSON, *timeout)
 		return oerr
 	})
 	if err != nil {
@@ -71,8 +73,36 @@ func cmdExec(args []string) error {
 	return nil
 }
 
-func collectExecOutput(c *Client, id uint32, ch <-chan protocol.Frame, echo bool) (stdout, stderr bytes.Buffer, exitCode int, err error) {
-	for f := range ch {
+func collectExecOutput(c *Client, id uint32, ch <-chan protocol.Frame, echo bool, timeout time.Duration) (stdout, stderr bytes.Buffer, exitCode int, err error) {
+	var expired <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		expired = timer.C
+	}
+	killed := false
+	timedOut := func() (bytes.Buffer, bytes.Buffer, int, error) {
+		stderr.WriteString(fmt.Sprintf("xpctl: timed out after %s, command killed\n", timeout))
+		return stdout, stderr, 124, nil
+	}
+	for {
+		var f protocol.Frame
+		select {
+		case nf, open := <-ch:
+			if !open {
+				return stdout, stderr, 0, nil
+			}
+			f = nf
+		case <-expired:
+			if killed {
+				return timedOut() // the agent did not confirm the kill in time
+			}
+			// Ask the agent to kill the process tree, then wait a little for it to report the exit.
+			killed = true
+			c.mux.Send(protocol.Frame{Type: protocol.MsgExecKill, StreamID: id})
+			expired = time.After(10 * time.Second)
+			continue
+		}
 		switch f.Type {
 		case protocol.MsgExecStdout:
 			stdout.Write(f.Payload)
@@ -89,12 +119,14 @@ func collectExecOutput(c *Client, id uint32, ch <-chan protocol.Frame, echo bool
 			protocol.Unmarshal(f.Payload, &res)
 			exitCode = res.ExitCode
 			c.mux.Send(protocol.Frame{Type: protocol.MsgStreamEnd, StreamID: id})
+			if killed {
+				return timedOut()
+			}
 			return stdout, stderr, exitCode, nil
 		case protocol.MsgError:
 			return stdout, stderr, 0, errorFromFrame(f)
 		}
 	}
-	return stdout, stderr, 0, nil
 }
 
 func cmdShell(args []string) error {
